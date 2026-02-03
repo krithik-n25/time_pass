@@ -7,13 +7,33 @@ import confetti from "canvas-confetti"
 export default function ValentinePage() {
     const [showResult, setShowResult] = useState(false)
     const [yesScale, setYesScale] = useState(1)
-    const [noPosition, setNoPosition] = useState({ left: "62%", top: "50%" })
-    const [noTransform, setNoTransform] = useState("translateY(-50%)")
+    const [noPosition, setNoPosition] = useState({ left: 62, top: 50, usePercent: true })
 
     const zoneRef = useRef<HTMLDivElement>(null)
     const noBtnRef = useRef<HTMLButtonElement>(null)
     const confettiCanvasRef = useRef<HTMLCanvasElement>(null)
     const confettiInstanceRef = useRef<confetti.CreateTypes | null>(null)
+    const isMovingRef = useRef(false)
+    const lastMoveTimeRef = useRef(0)
+    const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([])
+
+    // Preload speech synthesis voices
+    useEffect(() => {
+        if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+            const loadVoices = () => {
+                const availableVoices = window.speechSynthesis.getVoices()
+                if (availableVoices.length > 0) {
+                    setVoices(availableVoices)
+                }
+            }
+
+            // Load voices immediately if available
+            loadVoices()
+
+            // Also listen for voiceschanged event (some browsers load asynchronously)
+            window.speechSynthesis.onvoiceschanged = loadVoices
+        }
+    }, [])
 
     // Initialize confetti
     useEffect(() => {
@@ -71,50 +91,156 @@ export default function ValentinePage() {
         }, 300)
     }
 
-    const growYes = useCallback(() => {
-        setYesScale(prev => Math.min(2.2, prev + 0.1))
-    }, [])
+    // Speak "I love you" using Web Speech API
+    const speakLove = useCallback(() => {
+        if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+            // Cancel any ongoing speech
+            window.speechSynthesis.cancel()
 
-    const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n))
+            const utterance = new SpeechSynthesisUtterance("I lobe you")
+
+            // Try to find a nice female voice from preloaded voices
+            const femaleVoice = voices.find(voice =>
+                voice.name.toLowerCase().includes('female') ||
+                voice.name.toLowerCase().includes('zira') ||
+                voice.name.toLowerCase().includes('samantha') ||
+                voice.name.toLowerCase().includes('victoria') ||
+                voice.name.toLowerCase().includes('susan') ||
+                (voice.name.includes('Google') && voice.lang.startsWith('en'))
+            ) || voices.find(voice => voice.lang.startsWith('en')) || voices[0]
+
+            if (femaleVoice) {
+                utterance.voice = femaleVoice
+            }
+
+            utterance.rate = 0.85 // Slightly slower for romantic effect
+            utterance.pitch = 1.2 // Higher pitch for sweeter voice
+            utterance.volume = 1
+
+            // Small delay for dramatic effect after clicking
+            setTimeout(() => {
+                window.speechSynthesis.speak(utterance)
+            }, 500)
+        }
+    }, [voices])
+
+    const growYes = useCallback(() => {
+        setYesScale(prev => Math.min(2.2, prev + 0.08))
+    }, [])
 
     const moveNo = useCallback((px: number, py: number) => {
         if (!zoneRef.current || !noBtnRef.current) return
 
+        // Throttle movements to prevent jittering
+        const now = Date.now()
+        if (now - lastMoveTimeRef.current < 50) return
+        lastMoveTimeRef.current = now
+
+        if (isMovingRef.current) return
+        isMovingRef.current = true
+
         const z = zoneRef.current.getBoundingClientRect()
         const b = noBtnRef.current.getBoundingClientRect()
 
-        let dx = (b.left + b.width / 2) - px
-        let dy = (b.top + b.height / 2) - py
+        // Calculate direction away from cursor
+        const btnCenterX = b.left + b.width / 2
+        const btnCenterY = b.top + b.height / 2
+
+        let dx = btnCenterX - px
+        let dy = btnCenterY - py
         const mag = Math.hypot(dx, dy) || 1
         dx /= mag
         dy /= mag
 
-        let newLeft = (b.left - z.left) + dx * 150
-        let newTop = (b.top - z.top) + dy * 150
+        // Add some randomness to prevent predictable patterns
+        const randomAngle = (Math.random() - 0.5) * 0.8
+        const cos = Math.cos(randomAngle)
+        const sin = Math.sin(randomAngle)
+        const newDx = dx * cos - dy * sin
+        const newDy = dx * sin + dy * cos
 
-        newLeft = clamp(newLeft, 0, z.width - b.width)
-        newTop = clamp(newTop, 0, z.height - b.height)
+        // Calculate new position (relative to zone)
+        const currentLeft = b.left - z.left
+        const currentTop = b.top - z.top
 
-        setNoPosition({ left: `${newLeft}px`, top: `${newTop}px` })
-        setNoTransform("none")
+        const moveDistance = 100 + Math.random() * 50
+        let newLeft = currentLeft + newDx * moveDistance
+        let newTop = currentTop + newDy * moveDistance
+
+        // Clamp to bounds with padding
+        const padding = 5
+        const maxLeft = z.width - b.width - padding
+        const maxTop = z.height - b.height - padding
+
+        // If hitting boundary, try to escape to a different direction
+        if (newLeft <= padding || newLeft >= maxLeft || newTop <= padding || newTop >= maxTop) {
+            // Pick a random safe spot away from cursor
+            const safeSpots = []
+
+            // Check corners and edges
+            if (px > z.left + z.width / 2) {
+                safeSpots.push({ left: padding + Math.random() * 50, top: Math.random() * maxTop })
+            } else {
+                safeSpots.push({ left: maxLeft - Math.random() * 50, top: Math.random() * maxTop })
+            }
+
+            if (py > z.top + z.height / 2) {
+                safeSpots.push({ left: Math.random() * maxLeft, top: padding + Math.random() * 30 })
+            } else {
+                safeSpots.push({ left: Math.random() * maxLeft, top: maxTop - Math.random() * 30 })
+            }
+
+            // Pick a random safe spot
+            const spot = safeSpots[Math.floor(Math.random() * safeSpots.length)]
+            newLeft = spot.left
+            newTop = spot.top
+        }
+
+        // Final clamp
+        newLeft = Math.max(padding, Math.min(maxLeft, newLeft))
+        newTop = Math.max(padding, Math.min(maxTop, newTop))
+
+        setNoPosition({ left: newLeft, top: newTop, usePercent: false })
         growYes()
+
+        // Allow next movement after transition
+        setTimeout(() => {
+            isMovingRef.current = false
+        }, 200)
     }, [growYes])
 
     const handlePointerMove = useCallback((e: React.PointerEvent) => {
-        if (!noBtnRef.current) return
+        if (!noBtnRef.current || showResult) return
 
         const b = noBtnRef.current.getBoundingClientRect()
-        const d = Math.hypot(
-            (b.left + b.width / 2) - e.clientX,
-            (b.top + b.height / 2) - e.clientY
-        )
-        if (d < 140) moveNo(e.clientX, e.clientY)
-    }, [moveNo])
+        const btnCenterX = b.left + b.width / 2
+        const btnCenterY = b.top + b.height / 2
+        const distance = Math.hypot(btnCenterX - e.clientX, btnCenterY - e.clientY)
+
+        // Trigger movement when cursor is within 120px
+        if (distance < 120) {
+            moveNo(e.clientX, e.clientY)
+        }
+    }, [moveNo, showResult])
 
     const handleYesClick = () => {
         setShowResult(true)
         fullScreenConfetti()
+        speakLove()
     }
+
+    // Calculate button style
+    const noButtonStyle = noPosition.usePercent
+        ? {
+            left: `${noPosition.left}%`,
+            top: `${noPosition.top}%`,
+            transform: 'translate(-50%, -50%)'
+        }
+        : {
+            left: `${noPosition.left}px`,
+            top: `${noPosition.top}px`,
+            transform: 'none'
+        }
 
     return (
         <div className="relative min-h-screen w-full overflow-hidden">
@@ -184,16 +310,22 @@ export default function ValentinePage() {
                             >
                                 <button
                                     onClick={handleYesClick}
-                                    className="absolute left-[18%] top-1/2 px-6 py-4 text-lg font-extrabold rounded-full border-none cursor-pointer shadow-[0_10px_24px_rgba(0,0,0,0.14)] select-none transition-all duration-100 ease-out bg-[#ff3b7a] text-white hover:bg-[#ff1f68]"
-                                    style={{ transform: `translateY(-50%) scale(${yesScale})` }}
+                                    className="absolute left-[18%] top-1/2 px-6 py-4 text-lg font-extrabold rounded-full border-none cursor-pointer shadow-[0_10px_24px_rgba(0,0,0,0.14)] select-none bg-[#ff3b7a] text-white hover:bg-[#ff1f68]"
+                                    style={{
+                                        transform: `translateY(-50%) scale(${yesScale})`,
+                                        transition: 'transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1)'
+                                    }}
                                 >
                                     Yes
                                 </button>
                                 <button
                                     ref={noBtnRef}
                                     onClick={(e) => e.preventDefault()}
-                                    className="absolute px-6 py-4 text-lg font-extrabold rounded-full border-none cursor-pointer shadow-[0_10px_24px_rgba(0,0,0,0.14)] select-none transition-all duration-100 ease-out bg-gray-200 text-gray-800"
-                                    style={{ left: noPosition.left, top: noPosition.top, transform: noTransform }}
+                                    className="absolute px-6 py-4 text-lg font-extrabold rounded-full border-none cursor-pointer shadow-[0_10px_24px_rgba(0,0,0,0.14)] select-none bg-gray-200 text-gray-800 hover:bg-gray-300"
+                                    style={{
+                                        ...noButtonStyle,
+                                        transition: 'left 0.35s cubic-bezier(0.25, 0.46, 0.45, 0.94), top 0.35s cubic-bezier(0.25, 0.46, 0.45, 0.94), transform 0.35s cubic-bezier(0.25, 0.46, 0.45, 0.94)'
+                                    }}
                                 >
                                     No
                                 </button>
@@ -221,11 +353,12 @@ export default function ValentinePage() {
             </main>
 
             <style jsx>{`
-        @keyframes pop {
-          from { transform: scale(0.96); opacity: 0; }
-          to { transform: scale(1); opacity: 1; }
-        }
-      `}</style>
+                @keyframes pop {
+                    from { transform: scale(0.96); opacity: 0; }
+                    to { transform: scale(1); opacity: 1; }
+                }
+            `}</style>
         </div>
     )
 }
+
